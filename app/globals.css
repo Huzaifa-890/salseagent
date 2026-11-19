@@ -1,0 +1,7 @@
+body{font-family:system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#222}
+input,textarea{padding:8px;border:1px solid #ccc;border-radius:6px;font:inherit;width:100%;box-sizing:border-box;margin:4px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.row input{width:auto;flex:1;min-width:140px}
+button{padding:8px 14px;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer}
+button.alt{background:#666}
+table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #eee;text-align:left;font-size:14px;vertical-align:top}
+.tag{background:#eee;border-radius:10px;padding:2px 8px;font-size:12px}.msg{color:#555;font-size:14px}
