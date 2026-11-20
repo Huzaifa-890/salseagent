@@ -1,9 +1,34 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { q } from "./db";
-import { askJson } from "./llm";
 import { sendMail } from "./outreach";
 const e = process.env;
+
+function classifyReply(text: string) {
+  const content = text.toLowerCase();
+  if (/\b(unsubscribe|remove me|stop emailing|stop contacting|do not contact|don't contact|opt.?out)\b/.test(content)) {
+    return { intent: "unsubscribe", reply: "" };
+  }
+  if (/\b(out of office|automatic reply|auto.?reply|on leave|on vacation|away until)\b/.test(content)) {
+    return { intent: "out_of_office", reply: "" };
+  }
+  if (/\b(not interested|no thanks|not a fit|please stop)\b/.test(content)) {
+    return { intent: "not_interested", reply: "" };
+  }
+  if (text.includes("?") || /\b(price|pricing|cost|how much|more information|more details|could you explain)\b/.test(content)) {
+    return {
+      intent: "question",
+      reply: "Thanks for your question. I'll review it and get back to you shortly.",
+    };
+  }
+  if (/\b(interested|sounds good|let's talk|let's chat|book a call|schedule a call|call me)\b/.test(content)) {
+    return {
+      intent: "interested",
+      reply: `Thanks for getting back to us. You can choose a convenient time here: ${e.BOOKING_LINK || ""}`,
+    };
+  }
+  return { intent: "unclassified", reply: "" };
+}
 
 export async function checkReplies() {
   const c = new ImapFlow({ host: e.IMAP_HOST!, port: 993, secure: true, auth: { user: e.SMTP_USER!, pass: e.SMTP_PASS! }, logger: false });
@@ -19,8 +44,7 @@ export async function checkReplies() {
       const [l] = from ? await q("SELECT * FROM leads WHERE email=?", [from]) : [];
       if (!l) continue;
       const text = (m.text || "").slice(0, 1500);
-      const r = await askJson(
-        `Classify this reply to a cold sales email. JSON: {"intent":"interested|question|not_interested|unsubscribe|out_of_office","reply":"short helpful reply in the same language, only if interested/question, else empty"}. If they want to talk, invite them to book: ${e.BOOKING_LINK}`, text);
+      const r = classifyReply(text);
       if (r.intent === "unsubscribe") {
         await q("INSERT OR IGNORE INTO suppress VALUES(?)", [from]);
         await q("UPDATE leads SET status='unsubscribed' WHERE id=?", [l.id]);
