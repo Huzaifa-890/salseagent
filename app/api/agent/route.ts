@@ -1,5 +1,5 @@
 import { q, getSetting, setSetting } from "@/lib/db";
-import { findLeads, autoFindLeads } from "@/lib/leads";
+import { findLeads, autoFindLeads, importLeadsCsv } from "@/lib/leads";
 import { auditLead } from "@/lib/audit";
 import { draftLead, sendDraft, sendFollowup } from "@/lib/outreach";
 import { checkReplies } from "@/lib/inbox";
@@ -49,6 +49,7 @@ export async function POST(req: Request) {
   }
   try {
     if (action === "find") return Response.json({ added: await findLeads(p.niche, p.city, p.limit || 10) });
+    if (action === "import") return Response.json({ added: await importLeadsCsv(p.csv) });
     if (action === "autopilot") {
       const sourced = await autoFindLeads(p.limit || 10);
       const toAudit = await q("SELECT * FROM leads WHERE status=? LIMIT 3", ["new"]);

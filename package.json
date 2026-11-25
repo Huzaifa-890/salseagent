@@ -3,7 +3,6 @@
   "private": true,
   "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
   "dependencies": {
-    "@anthropic-ai/sdk": "latest",
     "@libsql/client": "^0.14.0",
     "imapflow": "^1.0.164",
     "mailparser": "^3.7.1",

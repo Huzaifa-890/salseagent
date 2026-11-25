@@ -3,9 +3,21 @@
 Implements the full flow: self-sourcing leads, auditing, scoring, drafting, staged
 follow-ups, proposals and closing - with your approval required before anything is sent.
 
+## Zero-cost by design
+No AI API key needed anywhere in the pipeline - lead sourcing, website audits, email/
+follow-up/proposal drafting, and reply classification are all deterministic (rule-based
+templates and regex, no LLM calls). The only required paid-adjacent thing is an email
+account to send from (a free Gmail works to start).
+- **Leads**: OpenStreetMap (Nominatim + Overpass) - free, no API key, no billing.
+  `GOOGLE_PLACES_KEY` is an optional paid fallback, only used if OpenStreetMap finds
+  nothing for a niche/city; leave it blank to stay fully free.
+- **Meetings**: the booking link in every email is self-service scheduling. Cal.com
+  (free, open-source, unlimited bookings) works as a no-cost alternative to Calendly's
+  limited free tier - set `BOOKING_LINK` to either.
+
 ## Local chalana (koi server nahi)
 1. `npm install`
-2. `cp .env.example .env` aur keys bharein (ADMIN_PASSWORD, CRON_SECRET, DATABASE_* khali chhod sakte hain)
+2. `cp .env.example .env` aur keys bharein (SMTP/IMAP email account chahiye; ADMIN_PASSWORD hata diya gaya hai - login ab database-backed hai; CRON_SECRET, DATABASE_* khali chhod sakte hain)
 3. `npm run dev` -> http://localhost:3000
 4. Dashboard mein "Autopilot settings" se niches/cities set karein, phir "Run autopilot now"
    dabayein - agent khud leads dhoondega, audit karega, aur draft banayega. Har email
@@ -16,12 +28,14 @@ follow-ups, proposals and closing - with your approval required before anything 
 1. Free Turso database banayein (turso.tech) -> DATABASE_URL aur DATABASE_AUTH_TOKEN lein
 2. Code GitHub par push karein (.env push NAHI hoti) -> vercel.com par import
 3. Vercel Settings > Environment Variables mein .env ki saari values daalein.
-   ADMIN_PASSWORD aur CRON_SECRET (koi lamba random text) zaroori hain.
+   SESSION_SECRET aur CRON_SECRET (koi lamba random text) zaroori hain - local wale reuse na karein, naye banayein.
 4. Deploy. `vercel.json` rozana 9am par chalata hai: naye leads dhoondna, audit, draft,
    follow-ups, aur reply check - sab khud-ba-khud (sirf naya email/proposal bhejne se
    pehle aapki approval chahiye, jab tak FOLLOWUP_AUTOSEND=1 na karein).
 
 ## What runs on its own vs. what needs your click
+- **Manual fallback**: "Import leads from CSV" on the dashboard for leads you collected by
+  hand (e.g. browsing Google Maps yourself) - same as the plan's manual backup step.
 - **Automatic**: lead sourcing (cycles your AUTOPILOT_NICHES x AUTOPILOT_CITIES),
   website audit, lead scoring (1-10), drafting first emails, drafting follow-ups
   (day 3-4 / 8-10 / 15), drafting proposal follow-ups (day 2 / day 5), reply

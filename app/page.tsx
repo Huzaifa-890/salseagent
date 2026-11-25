@@ -213,6 +213,12 @@ export default function Home() {
                   : <button className="alt" onClick={() => go("Pausing", { action: "pause" })}>Pause sending</button>}
                 <a href="/api/export"><button className="alt" type="button">Export CRM CSV</button></a>
               </div>
+              <details className="action-card">
+                <summary>Import leads from CSV</summary>
+                <p className="hint">For leads you collected by hand (e.g. browsing Google Maps). Columns required: name, website, email, phone, city, niche.</p>
+                <textarea rows={6} placeholder="name,website,email,phone,city,niche" onChange={(e) => ed(-3, "csv", e.target.value)} />
+                <button onClick={() => go("Importing CSV", { action: "import", csv: get(-3, "csv", "") })}>Import</button>
+              </details>
               <p className="msg">{msg}</p>
             </div>
 

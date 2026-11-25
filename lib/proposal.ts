@@ -1,26 +1,55 @@
 import { q, run, getSetting } from "./db";
-import { askJson } from "./llm";
 import { sendMail, recordSend } from "./outreach";
 const e = process.env;
 const NOW = () => Date.now() / 1000;
 const DAY = 86400;
-
-const PROPOSAL_SYSTEM = `You write short, honest web project proposals for ${e.FROM_NAME} at ${e.COMPANY}, a small agency selling websites to Australian small businesses on a limited budget. Price a little under typical competitor rates for a small business site of this scope - realistic AUD figures, no padding. Return JSON:
-{"scope":["bullet points of what's included"],"price":"AUD figure or range as a string","timeline":"e.g. 2-3 weeks","included":["revisions, hosting setup, etc"],"body":"a short plain-text proposal email (under 180 words) summarising scope, price and timeline, ending with an offer for a short call"}`;
 
 async function proposalGuard(email: string) {
   if ((await q("SELECT 1 FROM suppress WHERE email=?", [email])).length) throw new Error("Unsubscribed - do not contact");
   if ((await getSetting("manual_pause")) === "1") throw new Error("Sending is manually paused");
 }
 
+function splitList(v?: string) {
+  return (v || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// Deterministic pricing: base price for a small site, + a bit per extra page/feature,
+// nudged under a stated budget, clamped into a band that fits an AU small-business budget.
+function priceProposal(pages: string[], features: string[], budget?: string) {
+  const base = 600;
+  const extraPages = Math.max(0, pages.length - 3) * 80;
+  const featuresCost = features.length * 150;
+  let price = base + extraPages + featuresCost;
+  const budgetNum = Number((budget || "").replace(/[^0-9.]/g, ""));
+  if (Number.isFinite(budgetNum) && budgetNum > 0) price = Math.min(price, Math.round(budgetNum * 0.9));
+  return Math.max(500, Math.min(3000, Math.round(price / 10) * 10));
+}
+
 // Call once a lead has replied with interest and you've gathered what they need.
 export async function draftProposal(id: number, needs: { pages?: string; features?: string; budget?: string; timeline?: string }) {
   const [l] = await q("SELECT * FROM leads WHERE id=?", [id]);
   if (!l) throw new Error("Lead not found");
-  const a = JSON.parse(l.audit_json || "{}");
-  const d = await askJson(PROPOSAL_SYSTEM, JSON.stringify({ business: l.name, problems: a.problems, needs }));
+
+  const pages = splitList(needs.pages).length ? splitList(needs.pages) : ["Home", "About", "Services", "Contact"];
+  const features = splitList(needs.features);
+  const price = priceProposal(pages, features, needs.budget);
+  const timeline = needs.timeline?.trim() || (pages.length <= 3 ? "1-2 weeks" : pages.length <= 6 ? "2-3 weeks" : "3-4 weeks");
+  const included = ["Mobile-friendly, fast-loading design", "Basic on-page SEO setup", "Contact form", "One round of revisions", "Hosting setup guidance"];
+  const scope = [...pages.map((p) => `${p} page`), ...features];
+
+  const booking = e.BOOKING_LINK?.trim();
+  const body = [
+    `Hi,`,
+    `Here's a proposal for ${l.name}:`,
+    `Scope: ${scope.join(", ")}.`,
+    `Price: AUD $${price}. Timeline: ${timeline}.`,
+    `Included: ${included.join(", ")}.`,
+    `Happy to adjust scope or answer questions - a short call works too${booking ? `:\n${booking}` : "."}`,
+  ].join("\n\n");
+
+  const proposalJson = { scope, price: `AUD $${price}`, timeline, included, body };
   await q("UPDATE leads SET proposal_json=?, proposal_text=?, proposal_price=?, status='proposal_draft', next_action='Review and send proposal' WHERE id=?",
-    [JSON.stringify(d), d.body, d.price, id]);
+    [JSON.stringify(proposalJson), body, proposalJson.price, id]);
 }
 
 export async function sendProposal(id: number, text?: string, price?: string) {
@@ -35,7 +64,6 @@ export async function sendProposal(id: number, text?: string, price?: string) {
 }
 
 const PROPOSAL_FOLLOWUP_DUE_DAYS = [2, 5];
-const PROPOSAL_FOLLOWUP_SYSTEM = `You write a short (under 50 words), polite follow-up to a web project proposal that hasn't been answered yet, for ${e.FROM_NAME} at ${e.COMPANY}. Offer a short call. No pressure. Return JSON {"subject":"","body":""}.`;
 
 // Mirrors followups() for email: drafts a proposal follow-up for approval at day 2 and day 5,
 // or sends it straight away if FOLLOWUP_AUTOSEND=1.
@@ -46,15 +74,17 @@ export async function proposalFollowups() {
     const stage = Number(l.proposal_followups) || 0;
     if (!l.proposal_sent_at || NOW() - Number(l.proposal_sent_at) < PROPOSAL_FOLLOWUP_DUE_DAYS[stage] * DAY) continue;
     try {
-      const d = await askJson(PROPOSAL_FOLLOWUP_SYSTEM, JSON.stringify({ business: l.name }));
+      const booking = e.BOOKING_LINK?.trim();
+      const subject = `Re: Proposal: ${e.COMPANY} for ${l.name}`;
+      const body = `Hi,\n\nJust checking in on the proposal I sent over - happy to answer any questions or adjust the scope.${booking ? `\n\nA short call works too:\n${booking}` : ""}`;
       if (process.env.FOLLOWUP_AUTOSEND === "1") {
         await proposalGuard(l.email);
-        await sendMail(l.email, d.subject, d.body);
+        await sendMail(l.email, subject, body);
         await recordSend(l.id, "proposal_followup");
         await q("UPDATE leads SET proposal_followups=? WHERE id=?", [stage + 1, l.id]);
       } else {
         await q("UPDATE leads SET draft_subject=?, draft_body=?, status='proposal_followup_ready', next_action=? WHERE id=?",
-          [d.subject, d.body, `Proposal follow-up ${stage + 1} ready for review`, l.id]);
+          [subject, body, `Proposal follow-up ${stage + 1} ready for review`, l.id]);
       }
       n++;
     } catch {}
@@ -72,16 +102,20 @@ export async function sendProposalFollowup(id: number, subject?: string, body?: 
   await q("UPDATE leads SET status='proposal_sent', proposal_followups=?, next_action='Awaiting reply' WHERE id=?", [stage + 1, id]);
 }
 
-const AGREEMENT_SYSTEM = `Write a short plain-text email from ${e.FROM_NAME} at ${e.COMPANY} to a client who just accepted a web project proposal. Confirm what was agreed (scope/price/timeline), say a simple agreement and a deposit invoice are attached/to follow, and that work starts once the deposit is paid. Under 120 words. Return JSON {"subject":"","body":""}.`;
-
 // Deal won: drafts the agreement + deposit email for approval. Sending the actual invoice
 // (Stripe link, PDF, etc.) is up to you - this just confirms the deal and next step by email.
 export async function markWon(id: number) {
   const [l] = await q("SELECT * FROM leads WHERE id=?", [id]);
   if (!l) throw new Error("Lead not found");
-  const d = await askJson(AGREEMENT_SYSTEM, JSON.stringify({ business: l.name, price: l.proposal_price }));
+  const subject = `Agreement - ${e.COMPANY} x ${l.name}`;
+  const body = [
+    `Hi,`,
+    `Great news - confirming we're locked in at ${l.proposal_price || "the agreed price"}.`,
+    `I'll send over a simple agreement and a deposit invoice; work starts as soon as the deposit lands.`,
+    `Let me know if you have any questions in the meantime.`,
+  ].join("\n\n");
   await q("UPDATE leads SET status='agreement_ready', draft_subject=?, draft_body=?, next_action='Send agreement + deposit invoice' WHERE id=?",
-    [d.subject, d.body, id]);
+    [subject, body, id]);
 }
 
 export async function sendAgreement(id: number, subject?: string, body?: string) {

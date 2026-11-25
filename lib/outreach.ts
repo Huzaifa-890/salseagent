@@ -1,17 +1,9 @@
 import nodemailer from "nodemailer";
 import { q, run, getSetting } from "./db";
-import { askJson } from "./llm";
 import { reportMd } from "./audit";
 const e = process.env;
 const NOW = () => Date.now() / 1000;
 const DAY = 86400;
-
-const BASE = `You write cold emails for ${e.FROM_NAME} at ${e.COMPANY}, selling websites to Australian small businesses on a limited budget. Rules: plain text, no hype, no fake claims, no fake urgency, no signature, no unsubscribe line. Always end with a soft CTA to book a 15-min call: ${e.BOOKING_LINK}. Return JSON {"subject":"","body":""}.`;
-const FIRST = BASE + " Under 120 words. Open with the hook, mention 2 concrete findings, say a free full audit report is attached.";
-const FOLLOWUP1 = BASE + " This is a short, polite follow-up (under 60 words) to an unanswered first email. Add one new, genuinely useful tip related to their website problems. Low pressure.";
-const FOLLOWUP2 = BASE + " This is a second follow-up (under 70 words) to two unanswered emails. Offer a small concrete example - describe a quick mockup/before-after idea for their homepage - to make the value tangible. Low pressure.";
-const FOLLOWUP3 = BASE + " This is the final, polite closing email (under 50 words) after no reply to three emails. Say you'll stop following up, leave the door open if their situation changes later, no guilt-tripping.";
-const FOLLOWUP_PROMPTS = [FOLLOWUP1, FOLLOWUP2, FOLLOWUP3];
 const FOLLOWUP_DUE_DAYS = [3, 8, 15]; // days since the first email, per the plan
 
 export async function sendMail(to: string, subject: string, body: string, report?: string, inReplyTo?: string) {
@@ -51,13 +43,37 @@ export async function guard(email: string) {
   if (Number(m) >= batchSize) throw new Error(`Batch cooldown - wait ${e.BATCH_COOLDOWN_MIN || 15} min before the next batch`);
 }
 
-async function draft(l: any, prompt: string) {
-  const a = JSON.parse(l.audit_json);
-  return askJson(prompt, JSON.stringify({ business: l.name, hook: a.hook, problems: a.problems, best_service: a.best_service }));
+function clean(issue: string) { return issue.replace(/\.$/, "").toLowerCase(); }
+
+// Deterministic templates, no AI call - stage 0 is the first email, 1-3 are the day-3/8/15
+// follow-ups from the plan (tip / mockup idea / closing).
+function draft(l: any, stage: number) {
+  const a = JSON.parse(l.audit_json || "{}");
+  const problems = a.problems || [];
+  const booking = e.BOOKING_LINK?.trim();
+  const cta = booking ? `\n\nWould a short 15-min call be useful?\n${booking}` : "\n\nWould a short call be useful?";
+
+  if (stage === 0) {
+    // The hook already names problems[0]; only add a second line if there's a genuinely new point to make.
+    const extra = problems[1] ? `I also noticed ${clean(problems[1].issue)}.` : "";
+    const fix = problems[0]?.fix ? ` ${problems[0].fix}` : "";
+    return {
+      subject: `A quick idea for ${l.name}`,
+      body: [a.hook, [extra, fix].filter(Boolean).join(" ").trim(), "I've attached a free mini audit with a few more details."].filter(Boolean).join("\n\n") + cta,
+    };
+  }
+  if (stage === 1) {
+    const tip = problems[1]?.fix || problems[0]?.fix || "there are a couple of quick wins worth sharing for your site";
+    return { subject: "", body: `Hi,\n\nJust a quick follow-up - one more useful tip: ${tip}` + cta };
+  }
+  if (stage === 2) {
+    return { subject: "", body: `Hi,\n\nI put together a quick idea of what a refreshed homepage could look like for ${l.name} - happy to share it, no obligation.` + cta };
+  }
+  return { subject: "", body: `Hi,\n\nI'll leave it here for now so I'm not cluttering your inbox. If your situation changes and a website or marketing refresh becomes useful, just reply any time.` };
 }
 
 export async function draftLead(l: any) {
-  const d = await draft(l, FIRST);
+  const d = draft(l, 0);
   await q("UPDATE leads SET draft_subject=?, draft_body=?, status='drafted' WHERE id=?", [d.subject, d.body, l.id]);
 }
 
@@ -83,7 +99,7 @@ export async function followups() {
     const anchor = Number(l.first_contacted || l.last_contacted || 0);
     if (!anchor || NOW() - anchor < FOLLOWUP_DUE_DAYS[stage] * DAY) continue;
     try {
-      const d = await draft(l, FOLLOWUP_PROMPTS[stage]);
+      const d = draft(l, stage + 1);
       if (e.FOLLOWUP_AUTOSEND === "1") {
         await guard(l.email);
         await sendMail(l.email, "Re: " + l.draft_subject, d.body);
