@@ -1,5 +1,9 @@
 import { q, getSetting, setSetting } from "@/lib/db";
-import { findLeads, autoFindLeads, importLeadsCsv } from "@/lib/leads";
+import { findLeads, autoFindLeads, importLeadsCsv, LEAD_TYPES, type LeadType } from "@/lib/leads";
+
+function sanitizeLeadType(v: any): LeadType {
+  return LEAD_TYPES.includes(v) ? v : "any";
+}
 import { auditLead } from "@/lib/audit";
 import { draftLead, sendDraft, sendFollowup } from "@/lib/outreach";
 import { checkReplies } from "@/lib/inbox";
@@ -26,6 +30,9 @@ async function settingsPayload() {
   return {
     autopilot_niches: await getSetting("autopilot_niches", process.env.AUTOPILOT_NICHES || ""),
     autopilot_cities: await getSetting("autopilot_cities", process.env.AUTOPILOT_CITIES || ""),
+    autopilot_limit: await getSetting("autopilot_limit", "10"),
+    autopilot_lead_type: await getSetting("autopilot_lead_type", "any"),
+    autopilot_quality: await getSetting("autopilot_quality", "0"),
     manual_pause: await getSetting("manual_pause", "0"),
     paused_until: await getSetting("paused_until", "0"),
   };
@@ -48,10 +55,10 @@ export async function POST(req: Request) {
     return Response.json({ error: "Only an admin can send this" }, { status: 403 });
   }
   try {
-    if (action === "find") return Response.json({ added: await findLeads(p.niche, p.city, p.limit || 10) });
+    if (action === "find") return Response.json({ added: await findLeads(p.niche, p.city, p.limit || 10, sanitizeLeadType(p.leadType), !!p.highQuality) });
     if (action === "import") return Response.json({ added: await importLeadsCsv(p.csv) });
     if (action === "autopilot") {
-      const sourced = await autoFindLeads(p.limit || 10);
+      const sourced = await autoFindLeads(p.limit, p.leadType ? sanitizeLeadType(p.leadType) : undefined, p.highQuality !== undefined ? !!p.highQuality : undefined);
       const toAudit = await q("SELECT * FROM leads WHERE status=? LIMIT 3", ["new"]);
       await Promise.all(toAudit.map((l) => auditLead(l).catch(() => {})));
       const toDraft = await q("SELECT * FROM leads WHERE status=? LIMIT 3", ["audited"]);
@@ -84,6 +91,9 @@ export async function POST(req: Request) {
     if (action === "save_settings") {
       if (p.niches !== undefined) await setSetting("autopilot_niches", p.niches);
       if (p.cities !== undefined) await setSetting("autopilot_cities", p.cities);
+      if (p.limit !== undefined) await setSetting("autopilot_limit", String(Math.max(1, Math.min(20, Number(p.limit) || 10))));
+      if (p.leadType !== undefined) await setSetting("autopilot_lead_type", sanitizeLeadType(p.leadType));
+      if (p.highQuality !== undefined) await setSetting("autopilot_quality", p.highQuality ? "1" : "0");
       return Response.json({ done: 1 });
     }
     return Response.json({ error: "unknown action" }, { status: 400 });

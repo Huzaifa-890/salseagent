@@ -1,10 +1,15 @@
 {
   "name": "sales-agent",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
+  "scripts": {
+    "dev": "node init && next dev",
+    "build": "node init && next build",
+    "start": "node init && next start"
+  },
   "dependencies": {
     "@libsql/client": "^0.14.0",
     "imapflow": "^1.0.164",
+    "lucide-react": "^1.80.0",
     "mailparser": "^3.7.1",
     "next": "^15.0.0",
     "nodemailer": "^6.9.16",

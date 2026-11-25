@@ -1,13 +1,14 @@
 import { run } from "./db";
 
 type Problem = { issue: string; impact: string; fix: string };
+export type AuditResult = { summary: string; problems: Problem[]; best_service: string; hook: string; tech: any };
 
-export async function auditLead(l: any) {
-  const tech: any = { url: l.website };
-  if (!l.website) tech.note = "No website at all";
+export async function buildAudit(name: string, website?: string | null): Promise<AuditResult> {
+  const tech: any = { url: website };
+  if (!website) tech.note = "No website at all";
   else try {
     const t = Date.now();
-    const r = await fetch(l.website, { signal: AbortSignal.timeout(15000), headers: { "User-Agent": "Mozilla/5.0" } });
+    const r = await fetch(website, { signal: AbortSignal.timeout(15000), headers: { "User-Agent": "Mozilla/5.0" } });
     const h = await r.text(), lc = h.toLowerCase();
     Object.assign(tech, {
       load_seconds: (Date.now() - t) / 1000, https: r.url.startsWith("https"), size_kb: Math.round(h.length / 1024),
@@ -21,7 +22,7 @@ export async function auditLead(l: any) {
   } catch (e: any) { tech.error = String(e.message).slice(0, 100); }
 
   const problems: Problem[] = [];
-  if (!l.website) {
+  if (!website) {
     problems.push({
       issue: "No business website was found.",
       impact: "Customers searching online have no central place to learn about the business or get in touch.",
@@ -48,23 +49,27 @@ export async function auditLead(l: any) {
   const websiteIssues = problems.some((p) => /website|HTTPS|title|H1|mobile|load/i.test(p.issue));
   const best_service = websiteIssues ? "website" : problems.length ? "marketing" : "automation";
   const summary = problems.length
-    ? `A quick automated check of ${l.name} found ${problems.length} item${problems.length === 1 ? "" : "s"} worth fixing.`
-    : `A quick automated check found no obvious technical issues for ${l.name} - worth a manual look for business/conversion opportunities.`;
-  const hook = !l.website
-    ? `I noticed ${l.name} doesn't have a website listed online.`
+    ? `A quick automated check of ${name} found ${problems.length} item${problems.length === 1 ? "" : "s"} worth fixing.`
+    : `A quick automated check found no obvious technical issues for ${name} - worth a manual look for business/conversion opportunities.`;
+  const hook = !website
+    ? `I noticed ${name} doesn't have a website listed online.`
     : problems.length
     ? `I had a quick look at your website and noticed ${problems[0].issue.toLowerCase().replace(/\.$/, "")}.`
     : `I had a look at your website and wanted to share a couple of practical ideas.`;
 
-  const score = scoreLead(l, problems);
-  const a = { summary, problems, best_service, hook, tech };
+  return { summary, problems, best_service, hook, tech };
+}
+
+export async function auditLead(l: any) {
+  const a = await buildAudit(l.name, l.website);
+  const score = scoreLead(l, a.problems);
   await run("UPDATE leads SET audit_json=?, lead_score=?, problems=?, status='audited' WHERE id=?",
-    [JSON.stringify(a), score, problems.map((p) => p.issue).join("; "), l.id]);
+    [JSON.stringify(a), score, a.problems.map((p) => p.issue).join("; "), l.id]);
 }
 
 // Deterministic 1-10 score: no LLM call, just weighted signals already on hand.
 // need: missing site / number of problems found. budget proxy: review count. reachability: a phone number too.
-function scoreLead(l: any, problems: Problem[]) {
+export function scoreLead(l: any, problems: Problem[]) {
   let score = 5;
   if (!l.website) score += 1;
   score += Math.min(3, problems.length);
